@@ -209,6 +209,27 @@ export default function BuyerPage() {
     loadBuyer();
   }, [buyerId]);
 
+  useEffect(() => {
+    if (loading || !buyer) return;
+
+    const hash = window.location.hash.replace("#", "");
+
+    if (!hash) return;
+
+    const timer = window.setTimeout(() => {
+      const element = document.getElementById(hash);
+
+      if (element) {
+        element.scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        });
+      }
+    }, 100);
+
+    return () => window.clearTimeout(timer);
+  }, [loading, buyer]);
+
   async function addProduct(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
 
@@ -674,7 +695,7 @@ export default function BuyerPage() {
       <header className="bg-slate-950 text-white">
         <div className="mx-auto max-w-[1500px] px-6 py-7">
           <Link
-            href="/"
+            href="/dashboard"
             className="text-sm font-semibold text-blue-300 hover:text-blue-200"
           >
             ← Back to Buyers
@@ -870,7 +891,7 @@ export default function BuyerPage() {
               )}
             </Panel>
 
-            <Panel title="Record Cash Payment">
+            <Panel id="payment" title="Record Cash Payment">
               <form
                 onSubmit={recordPayment}
                 className="grid gap-3 md:grid-cols-2 xl:grid-cols-4"
@@ -949,7 +970,7 @@ export default function BuyerPage() {
           </div>
 
           <div className="space-y-5">
-            <Panel title="Create Invoice">
+            <Panel id="invoice" title="Create Invoice">
               <div className="grid gap-5 lg:grid-cols-2">
                 <div className="space-y-4">
                   <Field label="Invoice Date">
@@ -1230,14 +1251,19 @@ export default function BuyerPage() {
 }
 
 function Panel({
+  id,
   title,
   children,
 }: {
+  id?: string;
   title: string;
   children: React.ReactNode;
 }) {
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+    <section
+      id={id}
+      className="scroll-mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
+    >
       <h2 className="text-xl font-bold text-slate-950">
         {title}
       </h2>
