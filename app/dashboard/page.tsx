@@ -150,10 +150,25 @@ export default function DashboardPage() {
           .eq("user_id", currentUserId),
       ]);
 
-      if (buyerResult.error) throw buyerResult.error;
-      if (invoiceResult.error) throw invoiceResult.error;
-      if (paymentResult.error) throw paymentResult.error;
-      if (rateResult.error) throw rateResult.error;
+      if (buyerResult.error) {
+  console.error("VENDORS ERROR:", buyerResult.error);
+  throw buyerResult.error;
+}
+
+if (invoiceResult.error) {
+  console.error("INVOICES ERROR:", invoiceResult.error);
+  throw invoiceResult.error;
+}
+
+if (paymentResult.error) {
+  console.error("PAYMENTS ERROR:", paymentResult.error);
+  throw paymentResult.error;
+}
+
+if (rateResult.error) {
+  console.error("PRODUCT RATES ERROR:", rateResult.error);
+  throw rateResult.error;
+}
 
       setBuyers(
         (buyerResult.data ?? []).map((buyer) => ({

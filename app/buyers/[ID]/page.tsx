@@ -34,6 +34,8 @@ type Invoice = {
   subtotal: number;
   amount_paid: number;
   status: string;
+  balance_brought_forward: number;
+  rolled_forward_to: string | null;
 };
 
 type Payment = {
@@ -93,6 +95,7 @@ export default function BuyerPage() {
     null
   );
   const [savingInvoice, setSavingInvoice] = useState(false);
+  const [carryPreviousBalance, setCarryPreviousBalance] = useState(false);
 
   const [paymentInvoiceId, setPaymentInvoiceId] = useState("");
   const [paymentDate, setPaymentDate] = useState(today());
@@ -158,7 +161,7 @@ export default function BuyerPage() {
       const { data: invoiceData, error: invoiceError } = await supabase
         .from("invoices")
         .select(
-          "id, invoice_number, invoice_date, subtotal, amount_paid, status, created_at"
+          "id, invoice_number, invoice_date, subtotal, amount_paid, status, balance_brought_forward, rolled_forward_to, created_at"
         )
         .eq("vendor_id", buyerId)
         .order("invoice_date", { ascending: false })
@@ -174,6 +177,8 @@ export default function BuyerPage() {
           subtotal: Number(row.subtotal || 0),
           amount_paid: Number(row.amount_paid || 0),
           status: row.status,
+          balance_brought_forward: Number(row.balance_brought_forward || 0),
+          rolled_forward_to: row.rolled_forward_to || null,
         }))
       );
 
@@ -477,12 +482,43 @@ export default function BuyerPage() {
     }
   }
 
+  const previousBalance = useMemo(() => {
+    return invoices
+      .filter((invoice) => !invoice.rolled_forward_to)
+      .reduce(
+        (sum, invoice) =>
+          sum +
+          invoice.subtotal +
+          invoice.balance_brought_forward -
+          invoice.amount_paid,
+        0
+      );
+  }, [invoices]);
+
+  const carryInvoiceIds = useMemo(() => {
+    return invoices
+      .filter((invoice) => {
+        if (invoice.rolled_forward_to) return false;
+
+        const remaining =
+          invoice.subtotal +
+          invoice.balance_brought_forward -
+          invoice.amount_paid;
+
+        return Math.abs(remaining) >= 0.005;
+      })
+      .map((invoice) => invoice.id);
+  }, [invoices]);
+
   const invoiceTotal = useMemo(() => {
     return invoiceItems.reduce(
       (sum, item) => sum + Number(item.amount || 0),
       0
     );
   }, [invoiceItems]);
+
+  const carriedAmount = carryPreviousBalance ? previousBalance : 0;
+  const newInvoiceGrandTotal = invoiceTotal + carriedAmount;
 
   async function saveInvoice() {
     if (!invoiceDate) {
@@ -507,7 +543,8 @@ export default function BuyerPage() {
           invoice_date: invoiceDate,
           subtotal: 0,
           amount_paid: 0,
-          status: "unpaid",
+          balance_brought_forward: carriedAmount,
+          status: newInvoiceGrandTotal <= 0 ? "paid" : "unpaid",
         })
         .select("id, invoice_number")
         .single();
@@ -536,8 +573,27 @@ export default function BuyerPage() {
         throw itemError;
       }
 
+      if (carryPreviousBalance && carryInvoiceIds.length > 0) {
+        const { error: carryError } = await supabase
+          .from("invoices")
+          .update({
+            rolled_forward_to: invoiceData.id,
+          })
+          .in("id", carryInvoiceIds);
+
+        if (carryError) {
+          await supabase
+            .from("invoices")
+            .delete()
+            .eq("id", invoiceData.id);
+
+          throw carryError;
+        }
+      }
+
       setInvoiceItems([]);
       resetInvoiceItemForm();
+      setCarryPreviousBalance(false);
 
       setMessage(
         `Invoice ${invoiceData.invoice_number} saved successfully.`
@@ -586,9 +642,16 @@ export default function BuyerPage() {
     }
   }
 
-  const unpaidInvoices = invoices.filter(
-    (invoice) => invoice.subtotal - invoice.amount_paid > 0
-  );
+  const unpaidInvoices = invoices.filter((invoice) => {
+    if (invoice.rolled_forward_to) return false;
+
+    const remaining =
+      invoice.subtotal +
+      invoice.balance_brought_forward -
+      invoice.amount_paid;
+
+    return remaining > 0.005;
+  });
 
   async function recordPayment(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -616,13 +679,6 @@ export default function BuyerPage() {
 
     if (!invoice) {
       setError("Invoice not found.");
-      return;
-    }
-
-    const remaining = invoice.subtotal - invoice.amount_paid;
-
-    if (amount > remaining) {
-      setError(`Payment cannot exceed ${money(remaining)}.`);
       return;
     }
 
@@ -666,7 +722,18 @@ export default function BuyerPage() {
     0
   );
 
-  const balanceDue = totalInvoiced - totalPaid;
+  const balanceDue = invoices
+    .filter((invoice) => !invoice.rolled_forward_to)
+    .reduce(
+      (sum, invoice) =>
+        sum +
+        invoice.subtotal +
+        invoice.balance_brought_forward -
+        invoice.amount_paid,
+      0
+    );
+
+  const hasAccountCredit = balanceDue < -0.005;
 
   if (loading) {
     return (
@@ -738,9 +805,9 @@ export default function BuyerPage() {
           />
 
           <MetricCard
-            title="Balance Due"
-            value={money(balanceDue)}
-            tone="red"
+            title={hasAccountCredit ? "Available Credit" : "Balance Due"}
+            value={money(Math.abs(balanceDue))}
+            tone={hasAccountCredit ? "green" : "red"}
           />
         </section>
 
@@ -777,28 +844,33 @@ export default function BuyerPage() {
                 </button>
               </form>
 
-              <div className="mt-5 overflow-x-auto">
-                <table className="w-full min-w-[560px]">
-                  <thead>
-                    <tr className="border-b border-slate-300 text-left text-sm font-bold text-slate-700">
-                      <th className="pb-3">Product</th>
-                      <th className="pb-3">Percentage</th>
-                      <th className="pb-3 text-right">Actions</th>
-                    </tr>
-                  </thead>
-
-                  <tbody>
-                    {products.map((product) => (
-                      <ProductRow
-                        key={product.rate_id}
-                        product={product}
-                        onSave={updatePercentage}
-                        onDelete={deleteProduct}
-                      />
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              {products.length === 0 ? (
+                <p className="mt-4 text-sm font-medium text-slate-500">
+                  No products added yet.
+                </p>
+              ) : (
+                <div className="mt-4 max-h-[320px] overflow-auto rounded-xl border border-slate-200">
+                  <table className="w-full min-w-[520px]">
+                    <thead className="sticky top-0 z-10 bg-slate-50">
+                      <tr className="border-b border-slate-200 text-left text-xs font-bold uppercase tracking-wide text-slate-500">
+                        <th className="px-3 py-2">Product</th>
+                        <th className="px-3 py-2">Rate</th>
+                        <th className="px-3 py-2 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {products.map((product) => (
+                        <ProductRow
+                          key={product.rate_id}
+                          product={product}
+                          onSave={updatePercentage}
+                          onDelete={deleteProduct}
+                        />
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </Panel>
 
             <Panel title="Invoice History">
@@ -823,8 +895,13 @@ export default function BuyerPage() {
 
                     <tbody>
                       {invoices.map((invoice) => {
+                        const invoiceTotalWithBalance =
+                          invoice.subtotal +
+                          invoice.balance_brought_forward;
+
                         const balance =
-                          invoice.subtotal - invoice.amount_paid;
+                          invoiceTotalWithBalance -
+                          invoice.amount_paid;
 
                         return (
                           <tr
@@ -840,7 +917,14 @@ export default function BuyerPage() {
                             </td>
 
                             <td className="py-4 text-right font-semibold">
-                              {money(invoice.subtotal)}
+                              <div>{money(invoiceTotalWithBalance)}</div>
+                              {Math.abs(invoice.balance_brought_forward) >= 0.005 && (
+                                <div className="mt-1 text-xs font-semibold text-slate-500">
+                                  {invoice.balance_brought_forward > 0
+                                    ? `Includes ${money(invoice.balance_brought_forward)} previous due`
+                                    : `Includes ${money(Math.abs(invoice.balance_brought_forward))} credit`}
+                                </div>
+                              )}
                             </td>
 
                             <td className="py-4 text-right font-semibold">
@@ -852,7 +936,13 @@ export default function BuyerPage() {
                             </td>
 
                             <td className="py-4 text-right">
-                              <StatusBadge status={invoice.status} />
+                              {invoice.rolled_forward_to ? (
+                                <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold uppercase text-slate-700">
+                                  Carried
+                                </span>
+                              ) : (
+                                <StatusBadge status={invoice.status} />
+                              )}
                             </td>
 
                             <td className="py-4">
@@ -896,6 +986,11 @@ export default function BuyerPage() {
                 onSubmit={recordPayment}
                 className="grid gap-3 md:grid-cols-2 xl:grid-cols-4"
               >
+                <div className="md:col-span-2 xl:col-span-4 rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-800">
+                  You can enter more than the invoice balance. Any extra amount
+                  stays on the buyer account as credit and can be carried into a
+                  future invoice.
+                </div>
                 <Field label="Invoice">
                   <select
                     value={paymentInvoiceId}
@@ -910,7 +1005,9 @@ export default function BuyerPage() {
                       <option key={invoice.id} value={invoice.id}>
                         {invoice.invoice_number} —{" "}
                         {money(
-                          invoice.subtotal - invoice.amount_paid
+                          invoice.subtotal +
+                            invoice.balance_brought_forward -
+                            invoice.amount_paid
                         )}{" "}
                         due
                       </option>
@@ -983,6 +1080,51 @@ export default function BuyerPage() {
                       className="w-full rounded-xl border border-slate-300 px-4 py-3 text-slate-950"
                     />
                   </Field>
+
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-bold text-slate-950">
+                          Previous Account Balance
+                        </p>
+                        <p className={`mt-1 text-xl font-bold ${
+                          previousBalance < 0
+                            ? "text-green-700"
+                            : previousBalance > 0
+                            ? "text-red-700"
+                            : "text-slate-700"
+                        }`}>
+                          {previousBalance < 0
+                            ? `${money(Math.abs(previousBalance))} credit`
+                            : `${money(previousBalance)} due`}
+                        </p>
+                      </div>
+
+                      <label className={`flex items-center gap-2 rounded-xl border px-4 py-2 text-sm font-bold ${
+                        Math.abs(previousBalance) < 0.005
+                          ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400"
+                          : "cursor-pointer border-blue-200 bg-white text-blue-700"
+                      }`}>
+                        <input
+                          type="checkbox"
+                          checked={carryPreviousBalance}
+                          disabled={Math.abs(previousBalance) < 0.005}
+                          onChange={(e) =>
+                            setCarryPreviousBalance(e.target.checked)
+                          }
+                          className="h-4 w-4"
+                        />
+                        Pull into this invoice
+                      </label>
+                    </div>
+
+                    {carryPreviousBalance && (
+                      <p className="mt-3 text-xs font-semibold text-slate-600">
+                        The previous balance will be moved to this invoice. Old
+                        invoices stay in history and will be marked Carried.
+                      </p>
+                    )}
+                  </div>
 
                   <div className="border-t border-slate-200 pt-4">
                     <h3 className="text-lg font-bold text-slate-950">
@@ -1169,14 +1311,48 @@ export default function BuyerPage() {
                     )}
                   </div>
 
-                  <div className="mt-4 flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-4 py-4">
-                    <span className="font-bold text-slate-950">
-                      Invoice Total
-                    </span>
+                  <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-4">
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold text-slate-700">
+                        Current Charges
+                      </span>
+                      <span className="font-bold text-slate-950">
+                        {money(invoiceTotal)}
+                      </span>
+                    </div>
 
-                    <span className="text-2xl font-bold text-blue-700">
-                      {money(invoiceTotal)}
-                    </span>
+                    {carryPreviousBalance && Math.abs(carriedAmount) >= 0.005 && (
+                      <div className="mt-2 flex items-center justify-between">
+                        <span className="font-semibold text-slate-700">
+                          {carriedAmount > 0
+                            ? "Previous Due"
+                            : "Previous Credit"}
+                        </span>
+                        <span className={`font-bold ${
+                          carriedAmount < 0
+                            ? "text-green-700"
+                            : "text-red-700"
+                        }`}>
+                          {carriedAmount > 0 ? "+" : "-"}
+                          {money(Math.abs(carriedAmount))}
+                        </span>
+                      </div>
+                    )}
+
+                    <div className="mt-3 flex items-center justify-between border-t border-slate-200 pt-3">
+                      <span className="font-bold text-slate-950">
+                        {newInvoiceGrandTotal < 0
+                          ? "Credit Remaining"
+                          : "Invoice Total"}
+                      </span>
+                      <span className={`text-2xl font-bold ${
+                        newInvoiceGrandTotal < 0
+                          ? "text-green-700"
+                          : "text-blue-700"
+                      }`}>
+                        {money(Math.abs(newInvoiceGrandTotal))}
+                      </span>
+                    </div>
                   </div>
 
                   <button
@@ -1324,55 +1500,49 @@ function ProductRow({
   onDelete,
 }: {
   product: ProductRate;
-  onSave: (
-    rateId: string,
-    percentage: number
-  ) => Promise<void>;
-  onDelete: (
-    product: ProductRate
-  ) => Promise<void>;
+  onSave: (rateId: string, percentage: number) => Promise<void>;
+  onDelete: (product: ProductRate) => Promise<void>;
 }) {
-  const [percentage, setPercentage] = useState(
-    String(product.percentage)
-  );
+  const [percentage, setPercentage] = useState(String(product.percentage));
 
   useEffect(() => {
     setPercentage(String(product.percentage));
   }, [product.percentage]);
 
+  const changed = Number(percentage) !== product.percentage;
+
   return (
-    <tr className="border-b border-slate-200">
-      <td className="py-4 font-bold text-slate-950">
+    <tr className="border-b border-slate-100 last:border-b-0 hover:bg-slate-50">
+      <td className="px-3 py-2 text-sm font-bold text-slate-950">
         {product.product_name}
       </td>
-
-      <td className="py-4">
-        <input
-          type="number"
-          min="0"
-          step="0.01"
-          value={percentage}
-          onChange={(e) => setPercentage(e.target.value)}
-          className="w-28 rounded-lg border border-slate-300 px-3 py-2 font-semibold text-slate-950"
-        />
+      <td className="px-3 py-2">
+        <div className="flex items-center gap-1">
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            value={percentage}
+            onChange={(e) => setPercentage(e.target.value)}
+            className="w-20 rounded-lg border border-slate-300 px-2 py-1.5 text-sm font-semibold text-slate-950"
+          />
+          <span className="text-sm font-bold text-slate-500">%</span>
+        </div>
       </td>
-
-      <td className="py-4">
-        <div className="flex justify-end gap-2">
+      <td className="px-3 py-2">
+        <div className="flex justify-end gap-1.5">
           <button
             type="button"
-            onClick={() =>
-              onSave(product.rate_id, Number(percentage))
-            }
-            className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-bold text-white hover:bg-blue-700"
+            onClick={() => onSave(product.rate_id, Number(percentage))}
+            disabled={!changed}
+            className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
           >
             Save
           </button>
-
           <button
             type="button"
             onClick={() => onDelete(product)}
-            className="rounded-lg bg-red-50 px-4 py-2 text-sm font-bold text-red-700 hover:bg-red-100"
+            className="rounded-lg bg-red-50 px-3 py-1.5 text-xs font-bold text-red-700 hover:bg-red-100"
           >
             Delete
           </button>
