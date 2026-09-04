@@ -13,6 +13,7 @@ type Invoice = {
   amount_paid: number;
   status: string;
   vendor_id: string;
+  balance_brought_forward: number;
 };
 
 type Buyer = {
@@ -90,7 +91,7 @@ export default function ViewInvoicePage() {
           await supabase
             .from("invoices")
             .select(
-              "id, invoice_number, invoice_date, subtotal, amount_paid, status, vendor_id"
+              "id, invoice_number, invoice_date, subtotal, amount_paid, status, vendor_id, balance_brought_forward"
             )
             .eq("id", invoiceId)
             .maybeSingle();
@@ -109,6 +110,9 @@ export default function ViewInvoicePage() {
           amount_paid: Number(invoiceData.amount_paid || 0),
           status: invoiceData.status,
           vendor_id: invoiceData.vendor_id,
+          balance_brought_forward: Number(
+            invoiceData.balance_brought_forward || 0
+          ),
         };
 
         setInvoice(loadedInvoice);
@@ -145,8 +149,7 @@ export default function ViewInvoicePage() {
           (itemData ?? []).map((item: any) => ({
             id: item.id,
             game_name: item.game_name,
-            item_date:
-              item.item_date || invoiceData.invoice_date,
+            item_date: item.item_date || invoiceData.invoice_date,
             credits: Number(item.credits || 0),
             percentage: Number(item.percentage || 0),
             amount: Number(item.amount || 0),
@@ -156,9 +159,7 @@ export default function ViewInvoicePage() {
         const { data: paymentData, error: paymentError } =
           await supabase
             .from("payments")
-            .select(
-              "id, payment_date, amount, payment_method"
-            )
+            .select("id, payment_date, amount, payment_method")
             .eq("invoice_id", invoiceId)
             .order("payment_date", { ascending: true });
 
@@ -208,7 +209,7 @@ export default function ViewInvoicePage() {
           </p>
 
           <Link
-            href="/"
+            href="/dashboard"
             className="mt-6 inline-block font-semibold text-blue-700 hover:underline"
           >
             ← Back to Buyers
@@ -218,7 +219,22 @@ export default function ViewInvoicePage() {
     );
   }
 
-  const balance = invoice.subtotal - invoice.amount_paid;
+  const previousBalance = invoice.balance_brought_forward;
+
+  const invoiceTotal =
+    invoice.subtotal + previousBalance;
+
+  const balance =
+    invoiceTotal - invoice.amount_paid;
+
+  const hasPreviousDue =
+    previousBalance > 0.005;
+
+  const hasPreviousCredit =
+    previousBalance < -0.005;
+
+  const hasRemainingCredit =
+    balance < -0.005;
 
   return (
     <main className="min-h-screen bg-slate-100 px-4 py-8 print:bg-white print:p-0">
@@ -356,16 +372,68 @@ export default function ViewInvoicePage() {
                   </tr>
                 ))}
 
-                {items.length === 0 && (
-                  <tr>
+                {hasPreviousDue && (
+                  <tr className="border-t-2 border-slate-300 bg-amber-50">
+                    <td className="px-5 py-5 text-sm font-bold text-slate-500">
+                      —
+                    </td>
+
                     <td
-                      colSpan={5}
-                      className="px-5 py-10 text-center font-medium text-slate-500"
+                      colSpan={3}
+                      className="px-5 py-5"
                     >
-                      No invoice items found.
+                      <p className="font-black text-slate-950">
+                        Previous Balance Due
+                      </p>
+
+                      <p className="mt-1 text-xs font-semibold text-slate-500">
+                        Balance carried forward from previous invoice
+                      </p>
+                    </td>
+
+                    <td className="px-5 py-5 text-right text-lg font-black text-red-700">
+                      {money(previousBalance)}
                     </td>
                   </tr>
                 )}
+
+                {hasPreviousCredit && (
+                  <tr className="border-t-2 border-slate-300 bg-green-50">
+                    <td className="px-5 py-5 text-sm font-bold text-slate-500">
+                      —
+                    </td>
+
+                    <td
+                      colSpan={3}
+                      className="px-5 py-5"
+                    >
+                      <p className="font-black text-slate-950">
+                        Previous Credit
+                      </p>
+
+                      <p className="mt-1 text-xs font-semibold text-slate-500">
+                        Credit carried forward from previous invoice
+                      </p>
+                    </td>
+
+                    <td className="px-5 py-5 text-right text-lg font-black text-green-700">
+                      -{money(Math.abs(previousBalance))}
+                    </td>
+                  </tr>
+                )}
+
+                {items.length === 0 &&
+                  !hasPreviousDue &&
+                  !hasPreviousCredit && (
+                    <tr>
+                      <td
+                        colSpan={5}
+                        className="px-5 py-10 text-center font-medium text-slate-500"
+                      >
+                        No invoice items found.
+                      </td>
+                    </tr>
+                  )}
               </tbody>
             </table>
           </div>
@@ -374,11 +442,45 @@ export default function ViewInvoicePage() {
             <div className="w-full max-w-sm">
               <div className="flex items-center justify-between border-b border-slate-200 py-3">
                 <span className="font-semibold text-slate-600">
-                  Invoice Total
+                  Current Charges
                 </span>
 
                 <span className="font-bold text-slate-950">
                   {money(invoice.subtotal)}
+                </span>
+              </div>
+
+              {hasPreviousDue && (
+                <div className="flex items-center justify-between border-b border-slate-200 py-3">
+                  <span className="font-semibold text-slate-600">
+                    Previous Balance Due
+                  </span>
+
+                  <span className="font-bold text-red-700">
+                    +{money(previousBalance)}
+                  </span>
+                </div>
+              )}
+
+              {hasPreviousCredit && (
+                <div className="flex items-center justify-between border-b border-slate-200 py-3">
+                  <span className="font-semibold text-slate-600">
+                    Previous Credit
+                  </span>
+
+                  <span className="font-bold text-green-700">
+                    -{money(Math.abs(previousBalance))}
+                  </span>
+                </div>
+              )}
+
+              <div className="flex items-center justify-between border-b-2 border-slate-300 py-3">
+                <span className="font-bold text-slate-800">
+                  Invoice Total
+                </span>
+
+                <span className="text-lg font-black text-slate-950">
+                  {money(invoiceTotal)}
                 </span>
               </div>
 
@@ -392,13 +494,21 @@ export default function ViewInvoicePage() {
                 </span>
               </div>
 
-              <div className="mt-4 flex items-center justify-between rounded-xl bg-slate-950 px-5 py-5 text-white">
+              <div
+                className={`mt-4 flex items-center justify-between rounded-xl px-5 py-5 text-white ${
+                  hasRemainingCredit
+                    ? "bg-green-700"
+                    : "bg-slate-950"
+                }`}
+              >
                 <span className="font-bold text-white">
-                  Balance Due
+                  {hasRemainingCredit
+                    ? "Credit Remaining"
+                    : "Balance Due"}
                 </span>
 
                 <span className="text-2xl font-black text-white">
-                  {money(balance)}
+                  {money(Math.abs(balance))}
                 </span>
               </div>
             </div>
