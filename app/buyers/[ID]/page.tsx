@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 
 type Buyer = {
@@ -64,6 +64,9 @@ function formatDate(value: string) {
 
 export default function BuyerPage() {
   const pathname = usePathname();
+    const router = useRouter();
+  const [accessChecking, setAccessChecking] = useState(true);
+  const [hasAccess, setHasAccess] = useState(false);
 
   const buyerId = pathname
     ? pathname.split("/").filter(Boolean).pop() || ""
@@ -210,9 +213,109 @@ export default function BuyerPage() {
     }
   }
 
-  useEffect(() => {
-    loadBuyer();
-  }, [buyerId]);
+ useEffect(() => {
+  let mounted = true;
+
+  async function checkAccess() {
+    try {
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (!mounted) return;
+
+      if (userError || !user) {
+        router.replace("/sign-in");
+        return;
+      }
+
+      // Admins always have access
+      const { data: adminData, error: adminError } = await supabase
+        .from("app_admins")
+        .select("user_id")
+        .eq("user_id", user.id)
+        .maybeSingle();
+
+      if (adminError) {
+        console.error("ADMIN CHECK ERROR:", adminError);
+      }
+
+      if (adminData) {
+        if (!mounted) return;
+
+        setHasAccess(true);
+        setAccessChecking(false);
+        await loadBuyer();
+        return;
+      }
+
+      // Check trial/subscription
+      const {
+        data: subscriptionData,
+        error: subscriptionError,
+      } = await supabase
+        .from("account_subscriptions")
+        .select(
+          "status, trial_ends_at, subscription_ends_at"
+        )
+        .eq("user_id", user.id)
+        .maybeSingle();
+
+      if (!mounted) return;
+
+      if (subscriptionError || !subscriptionData) {
+        router.replace("/billing");
+        return;
+      }
+
+      const now = Date.now();
+
+      const trialEnd = subscriptionData.trial_ends_at
+        ? new Date(subscriptionData.trial_ends_at).getTime()
+        : 0;
+
+      const subscriptionEnd =
+        subscriptionData.subscription_ends_at
+          ? new Date(
+              subscriptionData.subscription_ends_at
+            ).getTime()
+          : 0;
+
+      const trialActive =
+        subscriptionData.status === "trial" &&
+        trialEnd > now;
+
+      const subscriptionActive =
+        subscriptionData.status === "active" &&
+        subscriptionEnd > now;
+
+      if (!trialActive && !subscriptionActive) {
+        router.replace("/billing");
+        return;
+      }
+
+      if (!mounted) return;
+
+      setHasAccess(true);
+      setAccessChecking(false);
+
+      await loadBuyer();
+    } catch (err) {
+      console.error("ACCESS CHECK ERROR:", err);
+
+      if (mounted) {
+        router.replace("/billing");
+      }
+    }
+  }
+
+  checkAccess();
+
+  return () => {
+    mounted = false;
+  };
+}, [buyerId, router]);
 
   useEffect(() => {
     if (loading || !buyer) return;
@@ -377,21 +480,21 @@ export default function BuyerPage() {
   );
 
   const calculatedAmount = useMemo(() => {
-    const creditAmount = Number(credits);
-    const percentage = Number(itemPercentage);
+  const creditAmount = Number(credits);
+  const percentage = Number(itemPercentage);
 
-    if (
-      !selectedProduct ||
-      !Number.isFinite(creditAmount) ||
-      !Number.isFinite(percentage) ||
-      creditAmount <= 0 ||
-      percentage < 0
-    ) {
-      return 0;
-    }
+  if (
+    !selectedProduct ||
+    !Number.isFinite(creditAmount) ||
+    !Number.isFinite(percentage) ||
+    creditAmount === 0 ||
+    percentage < 0
+  ) {
+    return 0;
+  }
 
-    return (creditAmount * percentage) / 100;
-  }, [selectedProduct, credits, itemPercentage]);
+  return (creditAmount * percentage) / 100;
+}, [selectedProduct, credits, itemPercentage]);
 
   function resetInvoiceItemForm() {
     setSelectedProductId("");
@@ -418,10 +521,10 @@ export default function BuyerPage() {
     const creditAmount = Number(credits);
     const percentage = Number(itemPercentage);
 
-    if (!Number.isFinite(creditAmount) || creditAmount <= 0) {
-      setError("Enter valid credits.");
-      return;
-    }
+   if (!Number.isFinite(creditAmount) || creditAmount === 0) {
+  setError("Enter valid credits. Use a negative number for withdrawals.");
+  return;
+}
 
     if (!Number.isFinite(percentage) || percentage < 0) {
       setError("Enter a valid percentage.");
@@ -734,7 +837,17 @@ export default function BuyerPage() {
     );
 
   const hasAccountCredit = balanceDue < -0.005;
-
+if (accessChecking || !hasAccess) {
+  return (
+    <main className="min-h-screen bg-slate-50 p-8 text-slate-900">
+      <div className="mx-auto max-w-7xl">
+        <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center shadow-sm">
+          Checking subscription...
+        </div>
+      </div>
+    </main>
+  );
+}
   if (loading) {
     return (
       <main className="min-h-screen bg-slate-50 p-8 text-slate-900">
@@ -1166,17 +1279,16 @@ export default function BuyerPage() {
                     </select>
                   </Field>
 
-                  <Field label="Credits">
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={credits}
-                      onChange={(e) => setCredits(e.target.value)}
-                      placeholder="e.g. 10000"
-                      className="w-full rounded-xl border border-slate-300 px-4 py-3 text-slate-950 placeholder:text-slate-400"
-                    />
-                  </Field>
+                  <Field label="Credits (+ Add / − Withdraw)">
+  <input
+    type="number"
+    step="0.01"
+    value={credits}
+    onChange={(e) => setCredits(e.target.value)}
+    placeholder="e.g. 10000 or -5000"
+    className="w-full rounded-xl border border-slate-300 px-4 py-3 text-slate-950 placeholder:text-slate-400"
+  />
+</Field>
 
                   <Field label="Percentage">
                     <input

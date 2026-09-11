@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import SubscriptionGuard from "@/components/SubscriptionGuard";
 
 type Invoice = {
   id: string;
@@ -236,7 +237,8 @@ export default function ViewInvoicePage() {
   const hasRemainingCredit =
     balance < -0.005;
 
-  return (
+return (
+  <SubscriptionGuard>
     <main className="min-h-screen bg-slate-100 px-4 py-8 print:bg-white print:p-0">
       <div className="mx-auto mb-5 flex max-w-5xl flex-wrap items-center justify-between gap-3 print:hidden">
         <div>
@@ -607,7 +609,8 @@ export default function ViewInvoicePage() {
           }
         }
       `}</style>
-    </main>
+      </main>
+  </SubscriptionGuard>
   );
 }
 

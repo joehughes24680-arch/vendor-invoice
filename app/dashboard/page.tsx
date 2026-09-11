@@ -88,14 +88,93 @@ export default function DashboardPage() {
         return;
       }
 
-      setUserId(user.id);
-      setUserEmail(user.email || "");
+    setUserId(user.id);
+setUserEmail(user.email || "");
 
-      await loadDashboard(user.id);
+// --------------------------------------------------
+// CHECK IF USER IS AN ADMIN
+// --------------------------------------------------
 
-      if (mounted) {
-        setAuthChecking(false);
-      }
+const { data: adminData, error: adminError } = await supabase
+  .from("app_admins")
+  .select("user_id")
+  .eq("user_id", user.id)
+  .maybeSingle();
+
+if (adminError) {
+  console.error("ADMIN CHECK ERROR:", adminError);
+}
+
+// Admins always have access
+const isAdmin = !!adminData;
+
+if (!isAdmin) {
+  // --------------------------------------------------
+  // CHECK SUBSCRIPTION / FREE TRIAL
+  // --------------------------------------------------
+
+  const {
+    data: subscriptionData,
+    error: subscriptionError,
+  } = await supabase
+    .from("account_subscriptions")
+    .select(
+      "status, trial_ends_at, subscription_ends_at"
+    )
+    .eq("user_id", user.id)
+    .maybeSingle();
+
+  if (subscriptionError) {
+    console.error(
+      "SUBSCRIPTION CHECK ERROR:",
+      subscriptionError
+    );
+
+    router.replace("/billing");
+    return;
+  }
+
+  if (!subscriptionData) {
+    router.replace("/billing");
+    return;
+  }
+
+  const now = new Date();
+
+  const trialEnd = subscriptionData.trial_ends_at
+    ? new Date(subscriptionData.trial_ends_at)
+    : null;
+
+  const subscriptionEnd =
+    subscriptionData.subscription_ends_at
+      ? new Date(subscriptionData.subscription_ends_at)
+      : null;
+
+  const trialActive =
+    subscriptionData.status === "trial" &&
+    trialEnd !== null &&
+    trialEnd.getTime() > now.getTime();
+
+  const subscriptionActive =
+    subscriptionData.status === "active" &&
+    subscriptionEnd !== null &&
+    subscriptionEnd.getTime() > now.getTime();
+
+  if (!trialActive && !subscriptionActive) {
+    router.replace("/billing");
+    return;
+  }
+}
+
+// --------------------------------------------------
+// USER HAS ACCESS
+// --------------------------------------------------
+
+await loadDashboard(user.id);
+
+if (mounted) {
+  setAuthChecking(false);
+}
     }
 
     initialize();
@@ -429,6 +508,25 @@ if (rateResult.error) {
       setDeletingBuyerId(null);
     }
   }
+async function testDatabaseAccess() {
+  try {
+    const { data, error } = await supabase.rpc("has_app_access");
+
+    if (error) {
+      console.error("HAS APP ACCESS ERROR:", error);
+      window.alert(`Access test error: ${error.message}`);
+      return;
+    }
+
+    console.log("HAS APP ACCESS:", data);
+    window.alert(`Database access: ${data ? "TRUE" : "FALSE"}`);
+  } catch (err: any) {
+    console.error("ACCESS TEST ERROR:", err);
+    window.alert(
+      `Access test error: ${err?.message || "Unknown error"}`
+    );
+  }
+}
 
   async function handleSignOut() {
     await supabase.auth.signOut();
@@ -467,12 +565,20 @@ if (rateResult.error) {
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            <Link
-              href="/account-settings"
-              className="rounded-xl border border-blue-500 bg-blue-600 px-5 py-3 text-sm font-bold text-white transition hover:bg-blue-700"
-            >
-              Account Settings
-            </Link>
+  <button
+    type="button"
+    onClick={testDatabaseAccess}
+    className="rounded-xl border border-green-500 bg-green-600 px-5 py-3 text-sm font-bold text-white transition hover:bg-green-700"
+  >
+    Test Access
+  </button>
+
+  <Link
+    href="/account-settings"
+    className="rounded-xl border border-blue-500 bg-blue-600 px-5 py-3 text-sm font-bold text-white transition hover:bg-blue-700"
+  >
+    Account Settings
+  </Link>
 
             <button
               type="button"
