@@ -1,17 +1,35 @@
 "use client";
 
 import Link from "next/link";
+import { Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { useState } from "react";
 import { supabase } from "@/lib/supabase";
 
 type PaymentMethod = "paypal" | "cashapp" | "chime";
 
 export default function BillingCheckoutPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="flex min-h-screen items-center justify-center bg-slate-100">
+          <p className="font-semibold text-slate-600">
+            Loading checkout...
+          </p>
+        </main>
+      }
+    >
+      <CheckoutContent />
+    </Suspense>
+  );
+}
+
+function CheckoutContent() {
   const searchParams = useSearchParams();
 
   const requestedPlan = searchParams.get("plan");
-  const plan = requestedPlan === "yearly" ? "yearly" : "monthly";
+
+  const plan: "monthly" | "yearly" =
+    requestedPlan === "yearly" ? "yearly" : "monthly";
 
   const [selectedMethod, setSelectedMethod] =
     useState<PaymentMethod | null>(null);
@@ -19,8 +37,8 @@ export default function BillingCheckoutPage() {
   const isYearly = plan === "yearly";
 
   const planName = isYearly
-    ? "VendorInvoice Yearly"
-    : "VendorInvoice Monthly";
+    ? "Vendor Invoice Yearly"
+    : "Vendor Invoice Monthly";
 
   const price = isYearly ? 199 : 19.99;
 
@@ -36,7 +54,7 @@ export default function BillingCheckoutPage() {
 
         <div className="mt-6 rounded-2xl bg-white p-8 shadow-sm">
           <p className="text-xs font-black uppercase tracking-[0.2em] text-blue-600">
-            VendorInvoice
+            Vendor Invoice
           </p>
 
           <h1 className="mt-2 text-3xl font-black text-slate-950">
@@ -105,8 +123,7 @@ export default function BillingCheckoutPage() {
               </h3>
 
               <p className="mt-2 text-sm font-medium text-slate-600">
-                PayPal automatic subscriptions will be connected after
-                the manual payment system is finished.
+                PayPal automatic subscriptions will be connected later.
               </p>
 
               <button
@@ -114,7 +131,7 @@ export default function BillingCheckoutPage() {
                 disabled
                 className="mt-5 w-full cursor-not-allowed rounded-xl bg-blue-400 px-5 py-3 font-black text-white"
               >
-                PayPal Coming Next
+                PayPal Coming Soon
               </button>
             </div>
           )}
@@ -213,9 +230,7 @@ function ManualPaymentBox({
         error: userError,
       } = await supabase.auth.getUser();
 
-      if (userError) {
-        throw userError;
-      }
+      if (userError) throw userError;
 
       if (!user) {
         throw new Error(
@@ -234,14 +249,12 @@ function ManualPaymentBox({
           status: "pending",
         });
 
-      if (insertError) {
-        throw insertError;
-      }
+      if (insertError) throw insertError;
 
       setReference("");
 
       setSuccess(
-        "Payment submitted successfully. Your subscription will be activated after the payment is approved."
+        "Payment submitted successfully. Your subscription will be activated after approval."
       );
     } catch (err: any) {
       console.error(err);
